@@ -28,6 +28,10 @@ resilience4j:
         retry-exceptions:
           - java.io.IOException
           - org.springframework.web.reactive.function.client.WebClientRequestException
+          # 5xx responses from product-service (e.g. it's temporarily down/overloaded).
+          # 409/404 never reach here -- ProductServiceClient converts those to
+          # ProductClientException, a business outcome, before Resilience4j sees them.
+          - org.springframework.web.reactive.function.client.WebClientResponseException
   circuitbreaker:
     instances:
       productService:

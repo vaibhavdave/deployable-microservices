@@ -140,6 +140,10 @@ All of this is Helm-templated (no separate `kubectl apply -f istio/` step) — `
 
 `istioctl install`, confirm sidecar injection is enabled on the target namespace, then `helm dependency update` (requires `helm repo add bitnami https://charts.bitnami.com/bitnami` first) and `helm upgrade --install` the umbrella chart. Confirm sidecars are injected (`kubectl get pods` shows `2/2`), then smoke-test through the Istio ingress gateway's external IP/port. Exact commands are in `deployable.md`.
 
+## Step 13 — Wire Up CI (`.github/workflows/ci.yml`)
+
+Added after Step 12, once local deployment worked, so CI could validate the exact same things this walkthrough validated manually: `backend-unit-test` (`./gradlew test`, no Docker), `backend-integration-test` (`./gradlew integrationTest`, needs Docker — GitHub-hosted runners have it), `ui-test` (`npm run test && npm run build`), `helm-validate` (`helm lint`/`helm template` across all three environment overlays), and `docker-build` (builds all four images, `push: false` — proves the Dockerfiles work without needing registry credentials in CI yet). This is also the first place the `docker build`/`helm dependency update` steps that couldn't be run in this repo's original sandboxed build environment (see `deployable.md`'s validation note) actually get exercised end to end — watch its first run on this branch rather than assuming it's clean.
+
 ## Where to Go Next
 
 - Read `deployable.md` for the full production deployment and operational runbook.

@@ -34,7 +34,7 @@ Lower layers run on every commit and must be fast (seconds); higher layers run l
 **Scope:** a single service wired up with its real dependencies where feasible.
 
 - `product-service` / `order-service`: `ProductControllerIT` / `OrderControllerIT`, both `@Tag("integration")` — `@SpringBootTest` + **Testcontainers Postgres** (real Flyway migration, real JPA queries, real transaction boundaries) plus, for `OrderControllerIT`, a WireMock stub standing in for product-service so the full slice (controller → service → client → repository) is proven together. Covers the DB-integration class of bug unit tests can't (constraint violations, migration correctness, query correctness).
-- Resilience assertions worth calling out explicitly once a real product-service dependency exists in CI: a 409/insufficient-stock response surfaces as `OrderController` returning 409 (asserted in `OrderControllerIT`); a timeout/5xx should trigger the configured Resilience4j retry then circuit-breaker open — this specific case needs a slow/failing WireMock stub (fixed delay or repeated 5xx) and isn't yet in `OrderControllerIT`; add it before relying on the circuit breaker in production.
+- Resilience assertions: a 409/insufficient-stock response surfaces as `OrderController` returning 409 (`createOrder_rejectedWhenProductServiceReturnsConflict`). `createOrder_confirmedAfterTransientFailuresRetried` uses a WireMock scenario (stateful stub: 503, 503, then 200) to prove the Resilience4j `@Retry` actually retries a real 5xx and eventually succeeds — this needs the full Spring context because the AOP proxy that makes `@Retry`/`@CircuitBreaker` do anything doesn't exist in a plain `new ProductServiceClient(webClient)` unit test. `createOrder_serviceUnavailableWhenProductServiceKeepsFailing` proves that once retries are exhausted, the circuit-breaker fallback maps to a 503 on the order, not a hang or an unmapped 500. Writing these two tests caught a real bug: the initial `resilience4j.retry.instances.productService.retry-exceptions` allow-list only included `IOException`/`WebClientRequestException` (connection-level failures) — a plain 503 response throws `WebClientResponseException`, which wasn't in that list, so 5xx responses would never have actually retried. Fixed by adding `WebClientResponseException` to the allow-list (safe to do broadly here specifically because `ProductServiceClient` already intercepts 409/404 into `ProductClientException` before Resilience4j ever sees them, so only genuine 5xx/other-error `WebClientResponseException`s reach the retry logic).
 - `ui`: MSW-backed component tests already cover the product-list → order-placement flow (§2); a browser-driven E2E pass against a real deployed stack is §6, not this layer.
 
 **Gate:** must pass before merge, in CI with Docker available (Docker-in-Docker or a Docker-enabled runner).
@@ -100,10 +100,12 @@ Validate that the mesh-level resilience configured in `deployable.md` actually d
 | Stage | Tests run | Blocking? |
 |---|---|---|
 | Local dev (`./gradlew test`, `npm run test`) | Unit (no Docker required) | Yes, before pushing |
-| Every PR (CI) | Unit + `./gradlew integrationTest` (Docker) + Helm lint/template (if `charts/` touched) + Contract + dependency/image scan | Yes, merge blocked on failure |
-| Merge to main | + End-to-end (staging deploy) | Yes, auto-revert or hold promotion on failure |
-| Pre-production release | + Performance/load + Chaos + DAST | Yes, manual release gate |
+| Every PR (CI — `.github/workflows/ci.yml`) | `backend-unit-test` + `backend-integration-test` (Docker, GitHub-hosted runners have it) + `ui-test` + `helm-validate` + `docker-build` (build-only, no push) | Yes, merge blocked on failure |
+| Merge to main | + End-to-end (staging deploy) + Contract tests | Yes, auto-revert or hold promotion on failure |
+| Pre-production release | + Performance/load + Chaos + DAST + image scan (Trivy — not yet wired into `ci.yml`, add before relying on this gate) | Yes, manual release gate |
 | Production | Smoke test immediately post-deploy; synthetic monitoring continuously | Yes — failed smoke test triggers the rollback runbook in `deployable.md` |
+
+**What's actually in `ci.yml` today** vs. planned: `backend-unit-test`, `backend-integration-test`, `ui-test`, `helm-validate`, and `docker-build` (builds all four images with `docker/build-push-action`, `push: false` — proves the Dockerfiles work without needing registry credentials) all run on every push/PR. Contract testing, E2E-against-staging, performance/chaos testing, and image/dependency scanning are documented above as the target state but are **not yet implemented as pipeline jobs** — they're the next things to add, not something already running.
 
 ## 11. Post-Production: Testing Doesn't Stop at Deploy
 

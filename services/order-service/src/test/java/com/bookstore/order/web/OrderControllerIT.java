@@ -1,7 +1,9 @@
 package com.bookstore.order.web;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
@@ -85,5 +87,52 @@ class OrderControllerIT {
         mockMvc.perform(post("/orders").contentType("application/json")
                         .content("{\"productId\":2,\"quantity\":999}"))
                 .andExpect(status().isConflict());
+    }
+
+    /**
+     * Proves the Resilience4j @Retry actually fires on a 5xx (not just a config-file
+     * assertion): product-service fails twice, then succeeds on the 3rd call, matching
+     * this service's max-attempts: 3. Requires the real Spring context -- the AOP proxy
+     * that makes @Retry/@CircuitBreaker do anything only exists there, not in a plain
+     * `new ProductServiceClient(webClient)` unit test.
+     */
+    @Test
+    void createOrder_confirmedAfterTransientFailuresRetried() throws Exception {
+        productServiceStub.stubFor(patch(urlEqualTo("/products/3/reserve"))
+                .inScenario("retry-then-succeed")
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(aResponse().withStatus(503))
+                .willSetStateTo("first-failure-done"));
+        productServiceStub.stubFor(patch(urlEqualTo("/products/3/reserve"))
+                .inScenario("retry-then-succeed")
+                .whenScenarioStateIs("first-failure-done")
+                .willReturn(aResponse().withStatus(503))
+                .willSetStateTo("second-failure-done"));
+        productServiceStub.stubFor(patch(urlEqualTo("/products/3/reserve"))
+                .inScenario("retry-then-succeed")
+                .whenScenarioStateIs("second-failure-done")
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {"id":3,"name":"Retry Book","description":"desc","price":20.0,"stockQuantity":4}
+                                """)));
+
+        mockMvc.perform(post("/orders").contentType("application/json")
+                        .content("{\"productId\":3,\"quantity\":1}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status", org.hamcrest.Matchers.is("CONFIRMED")));
+
+        productServiceStub.verify(3, WireMock.patchRequestedFor(urlEqualTo("/products/3/reserve")));
+    }
+
+    @Test
+    void createOrder_serviceUnavailableWhenProductServiceKeepsFailing() throws Exception {
+        productServiceStub.stubFor(patch(urlEqualTo("/products/4/reserve"))
+                .willReturn(aResponse().withStatus(503)));
+
+        mockMvc.perform(post("/orders").contentType("application/json")
+                        .content("{\"productId\":4,\"quantity\":1}"))
+                .andExpect(status().isServiceUnavailable());
+
+        productServiceStub.verify(3, WireMock.patchRequestedFor(urlEqualTo("/products/4/reserve")));
     }
 }
