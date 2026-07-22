@@ -1,0 +1,65 @@
+replicaCount: 2
+
+image:
+  repository: product-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+  targetPort: 8081
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+database:
+  host: product-db-postgresql
+  port: 5432
+  name: product_db
+  # Set to true only for local/dev convenience so the chart can create the secret itself
+  # with the values below. Staging/prod must set this false and pre-provision
+  # existingSecretName out-of-band (see deployable.md, secrets management).
+  createSecret: false
+  existingSecretName: product-db-credentials
+  usernameKey: username
+  passwordKey: password
+  devUsername: product_user
+  devPassword: product_pass
+
+istio:
+  enabled: true
+  destinationRule:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+
+podAnnotations: {}
+podLabels: {}
+topologySpreadConstraints: []

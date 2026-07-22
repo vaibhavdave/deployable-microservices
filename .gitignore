@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+**/build/
+!src/**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Node / UI
+ui/node_modules/
+ui/dist/
+ui/.env
+ui/.env.local
+
+# Helm vendored dependencies (regenerated via `helm dependency update`)
+charts/*/charts/
+charts/*/Chart.lock
+
+# OS
+.DS_Store

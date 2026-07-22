@@ -1,0 +1,36 @@
+{{/*
+Owns ALL ingress routing for the shared Gateway (both /api and /) in a single
+VirtualService. Istio does not guarantee match-order precedence when two separate
+VirtualServices bind the same host, so the catch-all "/" route for the UI and the
+"/api" route for api-gateway must live together here, with /api listed first.
+*/}}
+{{- if and .Values.istio.enabled .Values.istio.virtualService.enabled }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ include "ui.fullname" . }}
+  labels:
+    {{- include "ui.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.global.hostname | quote }}
+  gateways:
+    - {{ .Values.global.istio.gatewayName }}
+  http:
+    - match:
+        - uri:
+            prefix: /api
+      route:
+        - destination:
+            host: {{ .Values.apiGateway.serviceName }}
+            port:
+              number: {{ .Values.apiGateway.servicePort }}
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: {{ include "ui.fullname" . }}
+            port:
+              number: {{ .Values.service.port }}
+{{- end }}

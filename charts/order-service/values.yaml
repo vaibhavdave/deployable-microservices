@@ -1,0 +1,65 @@
+replicaCount: 2
+
+image:
+  repository: order-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+  targetPort: 8082
+
+productService:
+  baseUrl: http://product-service
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+database:
+  host: order-db-postgresql
+  port: 5432
+  name: order_db
+  createSecret: false
+  existingSecretName: order-db-credentials
+  usernameKey: username
+  passwordKey: password
+  devUsername: order_user
+  devPassword: order_pass
+
+istio:
+  enabled: true
+  destinationRule:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+
+podAnnotations: {}
+podLabels: {}
+topologySpreadConstraints: []

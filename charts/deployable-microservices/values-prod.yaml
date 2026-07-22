@@ -1,0 +1,47 @@
+# Production overrides. Real image tags are supplied at deploy time via --set (see
+# deployable.md deploy commands), not hardcoded here.
+
+global:
+  hostname: bookstore.example.com
+  tls:
+    enabled: true
+    credentialName: bookstore-prod-tls
+
+product-service:
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 10
+  database:
+    # REPLACE with the managed Postgres instance's endpoint before deploying to prod.
+    host: product-db.internal.example.com
+    createSecret: false
+    existingSecretName: product-db-credentials
+
+order-service:
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 10
+  database:
+    # REPLACE with the managed Postgres instance's endpoint before deploying to prod.
+    host: order-db.internal.example.com
+    createSecret: false
+    existingSecretName: order-db-credentials
+
+api-gateway:
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 12
+
+ui:
+  autoscaling:
+    minReplicas: 3
+    maxReplicas: 10
+
+# Production Postgres should be a managed, backed-up instance (RDS/Cloud SQL/etc.),
+# not the in-cluster Bitnami chart -- disable it here and point database.host at the
+# managed instance's endpoint via product-service.database.host / order-service.database.host.
+product-db:
+  enabled: false
+
+order-db:
+  enabled: false
