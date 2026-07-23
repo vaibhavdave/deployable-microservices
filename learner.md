@@ -2,6 +2,8 @@
 
 This document is a tutorial-style walkthrough of how the **Deployable Microservices** system is constructed from an empty repository to a fully containerized, mesh-ready, Helm-deployable set of services. It has been updated to match the actual implementation in this repo (not just the original plan) — where reality diverged from the plan, that's called out explicitly with the reason.
 
+> Looking for how the bare Gradle/Spring Boot project skeleton itself gets created — before any entity, repository, or controller is written? That's `bootstrap.md`, not here. This document picks up right where `bootstrap.md` leaves off.
+
 ## Use Case Recap
 
 An online bookstore slice with two independently-scalable Spring Boot services, an API Gateway, and a React UI:
@@ -146,5 +148,6 @@ Added after Step 12, once local deployment worked, so CI could validate the exac
 
 ## Where to Go Next
 
+- Read `bootstrap.md` for how the bare project skeleton (before Step 1 here) gets created.
 - Read `deployable.md` for the full production deployment and operational runbook.
 - Read `tests.md` for how testing should be layered from unit tests through post-production monitoring.
