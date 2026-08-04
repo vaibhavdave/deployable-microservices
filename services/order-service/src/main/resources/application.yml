@@ -21,6 +21,13 @@ product-service:
 
 resilience4j:
   retry:
+    # Default retryAspectOrder (LOWEST_PRECEDENCE-4) is lower than the default
+    # circuitBreakerAspectOrder (LOWEST_PRECEDENCE-3), which makes Retry the outer
+    # aspect. With CircuitBreaker's fallbackMethod as the inner aspect, the first
+    # failure gets swallowed into the fallback before Retry ever sees an exception
+    # to retry. Explicitly reversing the order (CircuitBreaker outer, Retry inner)
+    # makes retries happen first, with the fallback only firing once they're exhausted.
+    retry-aspect-order: 2
     instances:
       productService:
         max-attempts: 3
@@ -33,6 +40,7 @@ resilience4j:
           # ProductClientException, a business outcome, before Resilience4j sees them.
           - org.springframework.web.reactive.function.client.WebClientResponseException
   circuitbreaker:
+    circuit-breaker-aspect-order: 1
     instances:
       productService:
         sliding-window-size: 20
