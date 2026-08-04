@@ -1,0 +1,30 @@
+# Staging overrides. Real image tags are supplied at deploy time via --set (see
+# deployable.md deploy commands), not hardcoded here.
+
+global:
+  hostname: staging.bookstore.example.com
+  tls:
+    enabled: true
+    credentialName: bookstore-staging-tls
+
+product-service:
+  database:
+    createSecret: false
+    existingSecretName: product-db-credentials
+
+order-service:
+  database:
+    createSecret: false
+    existingSecretName: order-db-credentials
+
+product-db:
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+
+order-db:
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi

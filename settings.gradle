@@ -1,0 +1,5 @@
+rootProject.name = 'deployable-microservices'
+
+include 'services:product-service'
+include 'services:order-service'
+include 'services:api-gateway'

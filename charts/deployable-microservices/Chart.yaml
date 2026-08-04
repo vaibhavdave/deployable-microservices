@@ -1,0 +1,29 @@
+apiVersion: v2
+name: deployable-microservices
+description: Umbrella chart for the bookstore microservices system (product-service, order-service, api-gateway, ui)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: product-service
+    version: "0.1.0"
+    repository: "file://../product-service"
+  - name: order-service
+    version: "0.1.0"
+    repository: "file://../order-service"
+  - name: api-gateway
+    version: "0.1.0"
+    repository: "file://../api-gateway"
+  - name: ui
+    version: "0.1.0"
+    repository: "file://../ui"
+  - name: postgresql
+    alias: product-db
+    version: "15.5.20"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: product-db.enabled
+  - name: postgresql
+    alias: order-db
+    version: "15.5.20"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: order-db.enabled

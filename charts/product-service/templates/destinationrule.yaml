@@ -1,0 +1,15 @@
+{{- if .Values.istio.enabled }}
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ include "product-service.fullname" . }}
+  labels:
+    {{- include "product-service.labels" . | nindent 4 }}
+spec:
+  host: {{ include "product-service.fullname" . }}
+  trafficPolicy:
+    connectionPool:
+      {{- toYaml .Values.istio.destinationRule.connectionPool | nindent 6 }}
+    outlierDetection:
+      {{- toYaml .Values.istio.destinationRule.outlierDetection | nindent 6 }}
+{{- end }}

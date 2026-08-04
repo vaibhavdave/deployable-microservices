@@ -1,0 +1,24 @@
+{{/*
+Defense-in-depth alongside the AuthorizationPolicy rules above: even if Istio's L7 policy
+were misconfigured or bypassed, plain L3/L4 traffic is still confined to this namespace
+plus the ingress gateway's namespace.
+*/}}
+{{- if .Values.istioMeshPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-other-namespaces
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+{{- end }}

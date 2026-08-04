@@ -1,0 +1,66 @@
+replicaCount: 2
+
+image:
+  repository: ui
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  port: 80
+  targetPort: 8080
+
+# Baked into a runtime config.js at container start (see ui/docker-entrypoint.sh) so the
+# same built image can be promoted across dev/staging/prod without rebuilding.
+apiBaseUrl: http://bookstore.local/api
+
+# Referenced by this chart's VirtualService, which is the single owner of ingress
+# routing for the shared Gateway -- see templates/virtualservice.yaml for why /api
+# and / must live in one VirtualService rather than one each.
+apiGateway:
+  serviceName: api-gateway
+  servicePort: 80
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+istio:
+  enabled: true
+  gateway:
+    # The ui chart owns the single shared ingress Gateway; api-gateway's VirtualService
+    # references it by name rather than declaring its own Gateway resource.
+    create: true
+  virtualService:
+    enabled: true
+
+global:
+  hostname: bookstore.local
+  istio:
+    gatewayName: bookstore-gateway
+  tls:
+    enabled: false
+    # Name of the TLS Secret (e.g. provisioned by cert-manager) holding the cert for
+    # global.hostname. Required when tls.enabled is true.
+    credentialName: bookstore-tls
+
+podAnnotations: {}
+podLabels: {}
+topologySpreadConstraints: []

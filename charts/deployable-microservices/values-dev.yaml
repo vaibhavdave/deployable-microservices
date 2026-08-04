@@ -1,0 +1,41 @@
+# Local/dev overrides (kind/minikube). Layer on top of values.yaml:
+#   helm upgrade --install bookstore charts/deployable-microservices \
+#     -f charts/deployable-microservices/values.yaml \
+#     -f charts/deployable-microservices/values-dev.yaml -n bookstore-dev
+
+global:
+  hostname: bookstore.local
+
+product-service:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  database:
+    createSecret: true
+
+order-service:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+  database:
+    createSecret: true
+
+api-gateway:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+
+ui:
+  replicaCount: 2
+  autoscaling:
+    enabled: false
+
+product-db:
+  primary:
+    persistence:
+      enabled: false
+
+order-db:
+  primary:
+    persistence:
+      enabled: false

@@ -1,0 +1,73 @@
+# Shared defaults for all environments. Environment-specific overrides live in
+# values-dev.yaml / values-staging.yaml / values-prod.yaml (see deployable.md).
+
+global:
+  hostname: bookstore.local
+  istio:
+    gatewayName: bookstore-gateway
+  tls:
+    enabled: false
+    credentialName: bookstore-tls
+
+# Namespace-wide mesh policy (mTLS STRICT + per-service AuthorizationPolicy), rendered by
+# this umbrella chart's own templates/ since it's cross-cutting, not any one service's.
+istioMeshPolicy:
+  enabled: true
+  # Must match the ServiceAccount actually used by the cluster's istio-ingressgateway
+  # deployment -- this is the default for istioctl's "default"/"demo" profiles, but varies
+  # by install method (verify with: kubectl get sa -n istio-system).
+  ingressGatewayPrincipal: "cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"
+
+# createSecret defaults to false (safe by default) -- values-dev.yaml turns it on for
+# local convenience; staging/prod must pre-provision existingSecretName out-of-band
+# (see deployable.md, secrets management) and leave this false.
+product-service:
+  database:
+    host: product-db-postgresql
+
+order-service:
+  database:
+    host: order-db-postgresql
+  productService:
+    baseUrl: http://product-service
+
+api-gateway:
+  routes:
+    productServiceUri: http://product-service
+    orderServiceUri: http://order-service
+  cors:
+    allowedOrigins: http://bookstore.local
+
+ui:
+  apiBaseUrl: http://bookstore.local/api
+  apiGateway:
+    serviceName: api-gateway
+    servicePort: 80
+
+# Bitnami postgresql subchart, once per service database (database-per-service).
+# fullnameOverride must match each service's own database.host default above --
+# without it both aliased "postgresql" dependencies would render the same
+# "<release>-postgresql" service name and collide.
+product-db:
+  enabled: true
+  fullnameOverride: product-db-postgresql
+  auth:
+    username: product_user
+    password: product_pass
+    database: product_db
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+
+order-db:
+  enabled: true
+  fullnameOverride: order-db-postgresql
+  auth:
+    username: order_user
+    password: order_pass
+    database: order_db
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi

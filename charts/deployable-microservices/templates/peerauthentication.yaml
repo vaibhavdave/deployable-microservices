@@ -1,0 +1,12 @@
+{{- if .Values.istioMeshPolicy.enabled }}
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  mtls:
+    mode: STRICT
+{{- end }}

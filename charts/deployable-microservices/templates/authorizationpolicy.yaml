@@ -1,0 +1,74 @@
+{{/*
+Least-privilege service-to-service policy: each internal service only accepts traffic
+from the specific callers it actually has (api-gateway -> {product,order}-service,
+order-service -> product-service), and ui/api-gateway only accept traffic that entered
+through the mesh ingress gateway. Assumes each subchart's default ServiceAccount name
+(same as its chart name); if serviceAccount.name is overridden in values, update the
+principals below to match.
+*/}}
+{{- if .Values.istioMeshPolicy.enabled }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: product-service-allow
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: product-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/{{ .Release.Namespace }}/sa/api-gateway"
+              - "cluster.local/ns/{{ .Release.Namespace }}/sa/order-service"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: order-service-allow
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: order-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/{{ .Release.Namespace }}/sa/api-gateway"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: api-gateway-allow
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - {{ .Values.istioMeshPolicy.ingressGatewayPrincipal | quote }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: ui-allow
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ui
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - {{ .Values.istioMeshPolicy.ingressGatewayPrincipal | quote }}
+{{- end }}

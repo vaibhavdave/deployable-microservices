@@ -1,6 +1,8 @@
 # deployable.md — Deployment Guide (Local → Staging → Production)
 
-This document is a step-by-step runbook for deploying the Deployable Microservices system, plus the production hardening checklist that must be satisfied before any real traffic hits it.
+This document is a step-by-step runbook for deploying the Deployable Microservices system, plus the production hardening checklist that must be satisfied before any real traffic hits it. Updated after the initial implementation to reflect what was actually built (chart layout, commands, gotchas) rather than just the original plan.
+
+> **Validation note:** the environment this was built in had no outbound access to Docker Hub or `charts.bitnami.com` (registry/chart-repo domains outside its network allowlist), so `docker build` and `helm dependency update` for the Bitnami Postgres dependency could not be exercised end-to-end there. Everything Helm-side *was* validated with `helm lint` and `helm template` (including every `values-<env>.yaml` overlay) against locally-vendored chart dependencies, which is how the two gotchas in §4 were actually caught. `.github/workflows/ci.yml` now runs `docker build` for all four images and `helm dependency update` (against the real Bitnami repo) on every push/PR — GitHub-hosted runners have normal internet access, so this closes that gap going forward. Its first run against this branch is still the first real validation of those two things; watch it before treating this as fully proven.
 
 ## 1. Environments
 
@@ -23,47 +25,66 @@ Namespaces are isolated per environment (`bookstore-dev`, `bookstore-staging`, `
 
 ## 3. Build & Publish Images
 
-1. Build via Gradle: `./gradlew build` (runs unit + integration tests — a failing test blocks the image build).
-2. Build the image per service:
+1. Build via Gradle: `./gradlew check` (runs `test` + `integrationTest`, i.e. unit and Testcontainers/WireMock suites — a failing test blocks the image build; requires Docker for `integrationTest`, see `tests.md`).
+2. Build the image per service. **All three Java services build from the repository root as context**, not from their own subdirectory — the Dockerfiles' first stage needs `settings.gradle`, the root `build.gradle`, and all `services/*` module sources to resolve the multi-module Gradle project, even though only one module's `bootJar` ends up in the final image:
    ```
-   docker build -t <registry>/product-service:<git-sha> services/product-service
-   docker build -t <registry>/order-service:<git-sha> services/order-service
-   docker build -t <registry>/api-gateway:<git-sha> services/api-gateway
-   docker build -t <registry>/ui:<git-sha> ui
+   docker build -f services/product-service/Dockerfile -t <registry>/product-service:<git-sha> .
+   docker build -f services/order-service/Dockerfile   -t <registry>/order-service:<git-sha>   .
+   docker build -f services/api-gateway/Dockerfile      -t <registry>/api-gateway:<git-sha>     .
+   docker build -f ui/Dockerfile                        -t <registry>/ui:<git-sha>              ui
    ```
+   The UI is the one exception — it's a standalone npm project, so `ui/` alone is its own build context.
 3. Push all four images. **Tag immutably with the git SHA** — this is what makes rollback a one-line `helm upgrade` with the previous tag, not a rebuild.
 4. Scan every image before it's allowed into staging/prod (Trivy or equivalent) — fail the pipeline on HIGH/CRITICAL CVEs.
 
 ## 4. Helm Chart Layout
 
+Actual layout — service charts are flat under `charts/`, siblings of the umbrella chart, not nested inside it:
+
 ```
 charts/deployable-microservices/     # umbrella chart
-  Chart.yaml                         # dependencies: product-service, order-service,
-                                      #   api-gateway, ui, postgresql (aliased x2)
-  values.yaml                        # shared defaults
-  values-dev.yaml
-  values-staging.yaml
-  values-prod.yaml
+  Chart.yaml                         # dependencies: product-service, order-service (file://),
+                                      #   api-gateway, ui (file://), postgresql aliased x2 (Bitnami)
+  values.yaml                        # shared defaults, safe-by-default (createSecret: false, etc.)
+  values-dev.yaml                    # local convenience overrides (createSecret: true, no persistence)
+  values-staging.yaml                # TLS on, real hostname, existingSecretName
+  values-prod.yaml                   # TLS on, min 3 replicas, in-cluster Postgres disabled
+  templates/
+    peerauthentication.yaml          # mTLS STRICT, namespace-wide
+    authorizationpolicy.yaml         # least-privilege per-service ALLOW rules
+    networkpolicy.yaml               # defense-in-depth, namespace + istio-system only
 charts/product-service/
   templates/
-    deployment.yaml    # replicas from values, resource requests/limits, probes
+    deployment.yaml    # fixed Service/Deployment name = chart name (see note below)
     service.yaml
     hpa.yaml
     pdb.yaml
     serviceaccount.yaml
-    configmap.yaml
-    virtualservice.yaml
+    secret.yaml         # gated by database.createSecret, false by default (dev-only convenience)
     destinationrule.yaml
 charts/order-service/    (same shape)
-charts/api-gateway/       (same shape + istio Gateway resource)
-charts/ui/                (same shape)
+charts/api-gateway/       (same shape, no database/secret; env-configured routes to product/order)
+charts/ui/                (same shape, plus the shared Gateway + the one combined VirtualService)
 ```
+
+There is no `configmap.yaml` — env vars are set directly in each `deployment.yaml` from Helm values, which was simpler than a separate ConfigMap for this few a number of settings. There is no per-service `virtualservice.yaml` on `product-service`/`order-service`/`api-gateway`: only `ui` renders a `VirtualService`, and it owns *both* the `/api` and `/` routes in one resource — see the note below for why.
 
 Each service's `values.yaml` exposes at minimum: `image.repository`, `image.tag`, `replicaCount` (default **2**, never 1), `resources.requests/limits`, `autoscaling.minReplicas`/`maxReplicas`/`targetCPUUtilizationPercentage`, `pdb.minAvailable`.
 
+**Naming note:** `Service`/`Deployment` names are fixed to the chart name (`product-service`, `order-service`, `api-gateway`, `ui`) rather than prefixed with the Helm release name. This gives predictable, fixed in-cluster DNS for service-to-service calls (`order-service` reaches product-service at `http://product-service`, matching `PRODUCT_SERVICE_BASE_URL`'s default). It assumes **one release per namespace/environment** — this project's deployment model, per §1 — a second concurrent release of this chart in the same namespace would collide on resource names.
+
+**Bitnami Postgres aliasing gotcha:** the umbrella chart declares the `postgresql` chart twice, aliased `product-db` and `order-db`, for database-per-service. Aliasing alone does **not** change the rendered resource names inside that subchart — both aliased instances would otherwise render the identical `<release>-postgresql` Service name and collide. `values.yaml` sets `product-db.fullnameOverride: product-db-postgresql` and `order-db.fullnameOverride: order-db-postgresql` explicitly, matching each service's own `database.host` default. If you rename either override, update the matching service's `database.host` too.
+
+**Single combined `VirtualService`:** Istio does not guarantee route-match precedence across two *separate* `VirtualService` objects bound to the same host — a `/`-matching one from `ui` and a `/api`-matching one from `api-gateway` would rely on undefined merge order for `/api` to correctly win over the catch-all. Both routes are declared in one `VirtualService` (owned by `ui`, which also owns the `Gateway`), with `/api` listed before `/`.
+
 ## 5. Deploy Commands
 
-Local/dev:
+`helm dependency update` needs the Bitnami repo added once per machine (`helm repo add bitnami https://charts.bitnami.com/bitnami`) before it can resolve the `postgresql` dependency; the two local `file://` service charts resolve without network access. Run this after any change to a subchart or to `Chart.yaml`:
+```
+helm dependency update charts/deployable-microservices
+```
+
+Local/dev (`values.yaml` is always loaded automatically as the chart's defaults — only the environment overlay needs to be passed explicitly):
 ```
 kubectl create namespace bookstore-dev
 kubectl label namespace bookstore-dev istio-injection=enabled
@@ -81,12 +102,12 @@ helm upgrade --install bookstore charts/deployable-microservices \
   --set ui.image.tag=<git-sha> \
   --atomic --timeout 5m
 ```
-`--atomic` auto-rolls back the release if the upgrade fails health checks — never deploy to prod without it.
+`--atomic` auto-rolls back the release if the upgrade fails health checks — never deploy to prod without it. Production also expects `product-service.database.host`/`order-service.database.host` in `values-prod.yaml` to point at a real managed Postgres instance — the in-cluster Bitnami chart is disabled there (`product-db.enabled: false` / `order-db.enabled: false`); the placeholder hostnames in `values-prod.yaml` must be replaced before the first real prod deploy.
 
 ## 6. Secrets & Configuration
 
-- Non-sensitive config → Helm `values-<env>.yaml` → `ConfigMap`.
-- Sensitive config (DB credentials, API keys) → **never** in `values.yaml`. Use Kubernetes `Secret` objects created out-of-band, or better, a secrets manager integration (Sealed Secrets, External Secrets Operator against AWS Secrets Manager/Vault/GCP Secret Manager). Charts reference secrets by name only.
+- Non-sensitive config → Helm `values-<env>.yaml` → plain env vars set directly on each container in `deployment.yaml` (no separate `ConfigMap` resource — with this few settings per service, a `ConfigMap` would be an extra indirection without benefit; revisit if the per-service config surface grows significantly).
+- Sensitive config (DB credentials, API keys) → **never** in `values.yaml`. Use Kubernetes `Secret` objects created out-of-band, or better, a secrets manager integration (Sealed Secrets, External Secrets Operator against AWS Secrets Manager/Vault/GCP Secret Manager). Charts reference secrets by name via `existingSecretName`, and only create one themselves as a dev-only convenience gated by `database.createSecret` (false by default, see §4).
 - Database credentials are per-service (product DB creds only known to product-service, order DB creds only to order-service) — reinforces the database-per-service boundary.
 
 ## 7. Database Migrations
@@ -97,26 +118,26 @@ helm upgrade --install bookstore charts/deployable-microservices \
 ## 8. Production Hardening Checklist
 
 **Resilience & scaling**
-- [ ] `replicaCount` ≥ 2 for every Deployment, no exceptions.
-- [ ] `HorizontalPodAutoscaler` configured (CPU + memory), `minReplicas` ≥ 2.
-- [ ] `PodDisruptionBudget` (`minAvailable` ≥ 1) on every service.
-- [ ] Readiness and liveness probes on `/actuator/health/readiness` and `/actuator/health/liveness` (Spring Boot's split actuator health groups) — readiness gates traffic, liveness gates restarts.
-- [ ] Resource `requests`/`limits` set on every container (prevents noisy-neighbor and enables correct HPA behavior).
-- [ ] Anti-affinity or topology spread constraints so replicas of the same service land on different nodes/zones.
+- [x] `replicaCount: 2` default for every Deployment (3 in `values-prod.yaml` for the three backend services), no exceptions.
+- [x] `HorizontalPodAutoscaler` configured (CPU + memory for the Java services; CPU only for `ui`, which has no meaningful memory-driven scaling profile), `minReplicas` ≥ 2 everywhere.
+- [x] `PodDisruptionBudget` (`minAvailable: 1`) on every service.
+- [x] Readiness and liveness probes on `/actuator/health/readiness` / `/actuator/health/liveness` for the Java services (Spring Boot Actuator's health-probe groups), `/healthz` for `ui` (a static 200 route in `nginx.conf`).
+- [x] Resource `requests`/`limits` set on every container.
+- [ ] Anti-affinity or topology spread constraints — the `topologySpreadConstraints` value exists on every chart (empty by default) but no default constraint is set; fill it in per-cluster once you know your actual zone/node-pool topology.
 
 **Mesh & network**
-- [ ] Istio `PeerAuthentication` set to `STRICT` mTLS cluster-wide.
-- [ ] `AuthorizationPolicy` restricting which workloads may call which (e.g., only `api-gateway` may call `order-service`/`product-service`; only `order-service` may call `product-service`).
-- [ ] `DestinationRule` outlier detection (eject failing pods from the load-balancing pool) and sane connection-pool limits.
-- [ ] `NetworkPolicy` as defense-in-depth alongside Istio's L7 policies.
-- [ ] Ingress TLS terminated at the Istio Gateway with a valid certificate (cert-manager recommended).
+- [x] Istio `PeerAuthentication` set to `STRICT` mTLS, namespace-wide (`charts/deployable-microservices/templates/peerauthentication.yaml`, gated by `istioMeshPolicy.enabled`).
+- [x] `AuthorizationPolicy` restricting which workloads may call which — implemented exactly as: api-gateway → {product-service, order-service}; order-service → product-service; ingress-gateway → {api-gateway, ui} (`templates/authorizationpolicy.yaml`). The ingress-gateway principal (`istioMeshPolicy.ingressGatewayPrincipal`) defaults to the standard `istioctl` default/demo profile's SA — **verify against your actual cluster** (`kubectl get sa -n istio-system`) if it wasn't installed with that profile.
+- [x] `DestinationRule` outlier detection and connection-pool limits on every internal service (`product-service`, `order-service`, `api-gateway`).
+- [x] `NetworkPolicy` as defense-in-depth (`templates/networkpolicy.yaml`) — default-deny ingress except from the same namespace and `istio-system`.
+- [ ] Ingress TLS terminated at the Istio Gateway with a valid certificate (cert-manager recommended) — the `Gateway` template supports this (`global.tls.enabled` + `credentialName`), but it's off by default and the actual cert-manager `Certificate`/`Issuer` resources are not part of this chart; provision them separately per cluster.
 
 **Security**
-- [ ] Containers run as non-root, read-only root filesystem where possible, no privileged containers.
-- [ ] Pod Security Standards (`restricted`) enforced on the namespace.
-- [ ] Image scanning gate in CI (no HIGH/CRITICAL CVEs reach prod).
-- [ ] RBAC: each `ServiceAccount` scoped to only what it needs (no cluster-admin anywhere near app workloads).
-- [ ] Secrets never in Git, never in plain `ConfigMap`.
+- [x] Containers run as non-root (`runAsUser`/`runAsNonRoot` set on every pod spec) with capabilities dropped. Read-only root filesystem is set `true` on the three Java services (with an `emptyDir` mounted at `/tmp` for Spring Boot/Tomcat's own temp-file needs). It is **not** set on `ui` — nginx needs to write `/usr/share/nginx/html/config.js` at container start for the runtime-config mechanism (see `learner.md` Step 5); that's a deliberate, narrower tradeoff, not an oversight.
+- [ ] Pod Security Standards (`restricted`) enforced on the namespace — not yet applied as a namespace label in this repo; add `pod-security.kubernetes.io/enforce=restricted` when creating each environment's namespace.
+- [ ] Image scanning gate in CI (no HIGH/CRITICAL CVEs reach prod) — `.github/workflows/ci.yml` now builds all four images on every PR (`docker-build` job, no push), but does not yet scan them; add a Trivy step before relying on this gate.
+- [x] RBAC: each service gets its own dedicated `ServiceAccount` (`serviceAccount.create: true` by default in every chart), scoped only by the `AuthorizationPolicy` rules above — no explicit K8s `Role`/`RoleBinding` was needed since these services don't call the K8s API.
+- [x] Secrets never in Git: the only `Secret` the charts can create themselves (`product-service`/`order-service`'s `secret.yaml`) is gated `false` by default and only enabled in `values-dev.yaml`; staging/prod set `existingSecretName` and expect it pre-provisioned out-of-band.
 
 **Observability**
 - [ ] Prometheus scraping `/actuator/prometheus` on every service + Istio's own metrics.
@@ -132,9 +153,9 @@ helm upgrade --install bookstore charts/deployable-microservices \
 - [ ] Database migrations verified backward-compatible before code rollback is trusted.
 
 **Data**
-- [ ] Postgres deployed with persistent volumes backed by the cloud provider's durable storage class, not `emptyDir`.
-- [ ] Automated backups + a tested restore procedure (a backup nobody has restored from is not a backup).
-- [ ] Connection pooling (PgBouncer or Spring's Hikari tuned) sized against `maxReplicas × pool-size` so scale-out doesn't exhaust DB connections.
+- [x] Postgres in dev/staging uses persistent volumes (`primary.persistence.enabled: true`, 5Gi, via the Bitnami chart) rather than `emptyDir`. Production disables the in-cluster chart entirely (`product-db.enabled: false` / `order-db.enabled: false`) in favor of a managed instance (RDS/Cloud SQL/etc.) — the cloud provider's durable storage class and backup tooling apply there, not this Helm chart's concern.
+- [ ] Automated backups + a tested restore procedure — the responsibility of whichever managed Postgres service is chosen for staging/prod; not something this chart provisions.
+- [ ] Connection pooling (PgBouncer or Spring's Hikari tuned) sized against `maxReplicas × pool-size` so scale-out doesn't exhaust DB connections — not yet tuned; Hikari's defaults are in effect today, revisit once real load-test numbers exist (see `tests.md` §7).
 
 ## 9. Rollout Runbook (Production Release)
 
